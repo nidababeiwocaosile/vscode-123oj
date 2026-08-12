@@ -1,0 +1,142 @@
+{
+  "name": "123oj",
+  "displayName": "青岛123编程oj",
+  "description": "轻松地在 VS Code 中使用青岛123编程oj",
+  "version": "1.0.0",
+  "engines": {
+    "vscode": "^1.125.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [""],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "oj.logout",
+        "title": "登出 123OJ"
+      },
+      {
+        "command": "oj.login",
+        "title": "登录 123OJ"
+      },
+      {
+        "command": "my-webview-extension.openExternal",
+        "title": "Open Website in Browser"
+      },
+      {
+        "command": "my-webview-extension.openWebview",
+        "title": "Open Website in VSCode (Optimized)"
+      },
+      {
+        "command": "oj.refreshProblems",
+        "title": "刷新题目列表",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "oj.nextPage",
+        "title": "下一页",
+        "icon": "$(chevron-right)"
+      },
+      {
+        "command": "oj.prevPage",
+        "title": "上一页",
+        "icon": "$(chevron-left)"
+      },
+      {
+        "command": "oj.contestNextPage",
+        "title": "下一页",
+        "icon": "$(chevron-right)"
+      },
+      {
+        "command": "oj.contestPrevPage",
+        "title": "上一页",
+        "icon": "$(chevron-left)"
+      },
+      {
+        "command": "oj.openProblem",
+        "title": "打开题目"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "oj-explorer",
+          "title": "青岛123编程OJ",
+          "icon": "assets/oj-icon.png"
+        }
+      ]
+    },
+    "views": {
+      "oj-explorer": [
+        {
+          "icon": "$(star-empty)",
+          "id": "contestList",
+          "name": "比赛列表"
+        },
+        {
+          "icon": "$(book)",
+          "id": "problemList",
+          "name": "题目列表"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "oj.refreshProblems",
+          "when": "view == problemList",
+          "group": "navigation"
+        },
+        {
+          "command": "oj.prevPage",
+          "when": "view == problemList",
+          "group": "navigation"
+        },
+        {
+          "command": "oj.nextPage",
+          "when": "view == problemList",
+          "group": "navigation"
+        },
+        {
+          "command": "oj.contestPrevPage",
+          "when": "view == contestList",
+          "group": "navigation"
+        },
+        {
+          "command": "oj.contestNextPage",
+          "when": "view == contestList",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/http-proxy": "^1.17.17",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "24.x",
+    "@types/vscode": "^1.125.0",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.0.0",
+    "eslint": "^10.5.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.61.1"
+  },
+  "overrides": {
+    "diff": "^8.0.4",
+    "serialize-javascript": "^7.0.6"
+  },
+  "dependencies": {
+    "axios": "^1.19.0",
+    "http-proxy": "^1.18.1"
+  }
+}
