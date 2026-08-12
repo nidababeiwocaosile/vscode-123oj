@@ -4,7 +4,7 @@
 
 ## 使用说明
 
-请参考`Github`上的wiki页面。
+请参考`Github`上的[wiki](https://github.com/nidababeiwocaosile/vscode-123oj/wiki)页面。
 
 ## 完成功能
 
