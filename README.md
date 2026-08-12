@@ -1,4 +1,4 @@
-# 123oj
+# vscode-123oj
 
 轻松的让你在 VS Code 上使用[青岛123编程](https://www.kids123code.com/)oj。
 
@@ -24,10 +24,4 @@
 
 * deepseek
 * teto_cai
-# vscode-123oj
-# vscode-123oj
-# vscode-123oj
-# vscode-123oj
-# vscode-123oj
-# vscode-123oj
-# vscode-123oj
+
