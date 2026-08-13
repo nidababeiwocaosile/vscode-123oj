@@ -2,235 +2,319 @@ import * as vscode from 'vscode';
 import { ProblemTreeProvider } from './problemTreeProvider';
 import { ContestTreeProvider } from './contestTreeProvider';
 import { login, getProblemDetail, submitCode, getJudgeStatus, getCaseStatus } from './api';
+import axios from 'axios';
+import { ProblemItem } from './problemTreeProvider';
+import * as tmp from 'tmp';
+import * as fs from 'fs/promises';
+import { spawn } from 'child_process';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+
+const execPromise = promisify(exec);
 
 let problemProvider: ProblemTreeProvider;
 let contestProvider: ContestTreeProvider;
 
-export async function activate(context: vscode.ExtensionContext) {
-    console.log('miaomiaomiao 扩展已激活');
-
-    (async () => {
-        try {
-            console.log('[Test] 正在测试网络连通性...');
-            const res = await fetch('https://cppoj.kids123code.com');
-            console.log('[Test] ✅ 首页访问成功，状态码：', res.status);
-        } catch (err: any) {
-            console.error('[Test] ❌ 首页访问失败：', err.message);
-        }
-    })();
-
-    contestProvider = new ContestTreeProvider();
-    const contestTreeView = vscode.window.createTreeView('contestList', {
-        treeDataProvider: contestProvider,
-    });
-    context.subscriptions.push(contestTreeView);
-    await contestProvider.refresh();
-
-    problemProvider = new ProblemTreeProvider();
-    const problemTreeView = vscode.window.createTreeView('problemList', {
-        treeDataProvider: problemProvider,
-    });
-    context.subscriptions.push(problemTreeView);
-
-    const helloCmd = vscode.commands.registerCommand('miaomiaomiao.helloWorld', () => {
-        vscode.window.showInformationMessage('Hello World from miaomiaomiao!');
-    });
-    context.subscriptions.push(helloCmd);
-
-    const openExternalCmd = vscode.commands.registerCommand('my-webview-extension.openExternal', () => {
-        vscode.env.openExternal(vscode.Uri.parse('https://example.com'));
-    });
-    context.subscriptions.push(openExternalCmd);
-
-    const openWebviewCmd = vscode.commands.registerCommand('my-webview-extension.openWebview', () => {
-        const panel = vscode.window.createWebviewPanel(
-            'websiteProxy', '网站（代理模式）', vscode.ViewColumn.Beside,
-            { enableScripts: true, retainContextWhenHidden: true }
-        );
-        panel.webview.html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>body{margin:0;overflow:hidden;background:#1e1e2e;}iframe{width:100vw;height:100vh;border:none;}</style></head><body><iframe src="http://127.0.0.1:3000/"></iframe></body></html>`;
-    });
-    context.subscriptions.push(openWebviewCmd);
-
-    const loginCmd = vscode.commands.registerCommand('oj.login', async () => {
-        const username = await vscode.window.showInputBox({ prompt: '输入用户名', placeHolder: '请输入你的 OJ 用户名' });
-        if (!username) return;
-        const password = await vscode.window.showInputBox({ prompt: '输入密码', password: true, placeHolder: '请输入你的密码' });
-        if (!password) return;
-        await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: '正在登录...', cancellable: false }, async () => {
-            const success = await login(username, password);
-            if (success) {
-                vscode.window.showInformationMessage('✅ 登录成功！');
-                await context.secrets.store('oj-username', username);
-                await context.secrets.store('oj-password', password);
-                await contestProvider.refresh();
-            } else {
-                vscode.window.showErrorMessage('❌ 登录失败，请检查用户名密码');
-            }
-        });
-    });
-    context.subscriptions.push(loginCmd);
-
-    // ========== 新增登出命令 ==========
-    const logoutCmd = vscode.commands.registerCommand('oj.logout', async () => {
-        await context.secrets.delete('oj-username');
-        await context.secrets.delete('oj-password');
-        vscode.window.showInformationMessage('👋 已登出，下次请手动登录');
-        await contestProvider.refresh();
-    });
-    context.subscriptions.push(logoutCmd);
-
-    const selectContestCmd = vscode.commands.registerCommand('oj.selectContest', async (contestId: string) => {
-        vscode.window.showInformationMessage(`已选择比赛: ${contestId}`);
-        problemProvider.setContestId(contestId);
-        await problemProvider.refresh();
-    });
-    context.subscriptions.push(selectContestCmd);
-
-    const refreshContestCmd = vscode.commands.registerCommand('oj.refreshContests', () => contestProvider.refresh());
-    context.subscriptions.push(refreshContestCmd);
-    const refreshProblemsCmd = vscode.commands.registerCommand('oj.refreshProblems', () => problemProvider.refresh());
-    context.subscriptions.push(refreshProblemsCmd);
-    const nextPageCmd = vscode.commands.registerCommand('oj.nextPage', () => problemProvider.nextPage());
-    context.subscriptions.push(nextPageCmd);
-    const prevPageCmd = vscode.commands.registerCommand('oj.prevPage', () => problemProvider.prevPage());
-    context.subscriptions.push(prevPageCmd);
-
-    const contestNextCmd = vscode.commands.registerCommand('oj.contestNextPage', () => contestProvider.nextPage());
-    const contestPrevCmd = vscode.commands.registerCommand('oj.contestPrevPage', () => contestProvider.prevPage());
-    context.subscriptions.push(contestNextCmd, contestPrevCmd);
-
-    const openProblemCmd = vscode.commands.registerCommand('oj.openProblem', async (problemId: string, problemTitle?: string) => {
-        try {
-            const contestId = problemProvider.getCurrentContestId();
-            if (!contestId) { vscode.window.showErrorMessage('未选择比赛，请先选择一场比赛'); return; }
-            await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: '正在加载题目...', cancellable: false }, async () => {
-                const data = await getProblemDetail(problemId, contestId);
-                const panel = vscode.window.createWebviewPanel('problemDetail', `题目: ${problemTitle || problemId}`, vscode.ViewColumn.Beside, { enableScripts: true, retainContextWhenHidden: true });
-                const title = problemTitle || data.title || data.problemtitle || `题目 ${problemId}`;
-                const description = data.des || data.description || data.content || '';
-                const input = data.input || '';
-                const output = data.output || '';
-                const hint = data.hint || '';
-                const timeLimit = data.time || data.time_limit || '';
-                const memoryLimit = data.memory || data.memory_limit || '';
-                let samples: { input: string; output: string }[] = [];
-                const rawInput = data.sinput || '';
-                const rawOutput = data.soutput || '';
-                if (rawInput && rawOutput) {
-                    const inputParts = rawInput.split('|#)');
-                    const outputParts = rawOutput.split('|#)');
-                    for (let i = 0; i < Math.min(inputParts.length, outputParts.length); i++) {
-                        const inp = inputParts[i]?.trim() || '';
-                        const outp = outputParts[i]?.trim() || '';
-                        if (inp || outp) samples.push({ input: inp, output: outp });
-                    }
-                } else if (data.samples && Array.isArray(data.samples)) {
-                    samples = data.samples.map((s: any) => ({ input: s.input || s.in || '', output: s.output || s.out || '' }));
-                } else if (data.sample && Array.isArray(data.sample)) {
-                    samples = data.sample.map((s: any) => ({ input: s.input || s.in || '', output: s.output || s.out || '' }));
-                }
-                const contentHtml = buildProblemContentHtml({ title, description, input, output, hint, timeLimit, memoryLimit, samples, rawInput, rawOutput, problemId, contestId });
-                panel.webview.html = getWebviewTemplate(title, contentHtml);
-                panel.webview.onDidReceiveMessage(async msg => {
-                    if (msg.command === 'openSubmit') vscode.commands.executeCommand('oj.submit', msg.problemId, msg.contestId);
-                });
-            });
-        } catch (err) {
-            vscode.window.showErrorMessage('加载题目失败：' + (err instanceof Error ? err.message : String(err)));
-        }
-    });
-    context.subscriptions.push(openProblemCmd);
-
-    const submitCmd = vscode.commands.registerCommand('oj.submit', async (problemId: string, contestId: string) => {
-        const editor = vscode.window.activeTextEditor;
-        if (!editor) { vscode.window.showErrorMessage('请先打开一个代码文件'); return; }
-        const code = editor.document.getText();
-        if (!code.trim()) { vscode.window.showErrorMessage('代码内容为空，无法提交'); return; }
-
-        const selected = await vscode.window.showQuickPick(
-            ['C++', 'Python3'].map(l => ({ label: l, value: l })),
-            { placeHolder: '选择编程语言' }
-        );
-        if (!selected) return;
-
-        await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: '正在提交代码...', cancellable: false }, async () => {
-            try {
-                const submitResult = await submitCode({ problem: problemId, contest: contestId, language: selected.value, code });
-                const submissionId = submitResult.submission_id || submitResult.id || submitResult.statusid;
-                if (!submissionId) throw new Error('提交成功但未返回 ID：' + JSON.stringify(submitResult));
-                vscode.window.showInformationMessage(`✅ 提交成功！提交 ID: ${submissionId}，正在评测...`);
-
-                let judgeDone = false;
-                for (let i = 0; i < 60; i++) {
-                    await new Promise(r => setTimeout(r, 1000));
-                    const raw = await getJudgeStatus(submissionId);
-                    const item = Array.isArray(raw) ? raw[0] : raw;
-                    if (!item) continue;
-                    const res = item.result;
-                    const done = (typeof res === 'string' && !/^-\d+$/.test(res)) ||
-                                 (typeof res === 'number' && res >= 0);
-                    if (done) {
-                        judgeDone = true;
-                        break;
-                    }
-                }
-
-                if (!judgeDone) {
-                    vscode.window.showWarningMessage('⏰ 评测超时，请稍后在 OJ 网站上查看结果。');
-                    return;
-                }
-
-                let detail: any = null;
-                for (let retry = 0; retry < 30; retry++) {
-                    const caseData = await getCaseStatus(submissionId);
-                    const items = Array.isArray(caseData) ? caseData : [caseData];
-                    detail = items.find((item: any) => {
-                        const timeStr = String(item.cputimelist ?? '');
-                        return timeStr.includes('|');
-                    });
-                    if (detail) break;
-                    await new Promise(r => setTimeout(r, 2000));
-                }
-                if (!detail) {
-                    const caseData = await getCaseStatus(submissionId);
-                    detail = Array.isArray(caseData) ? caseData[0] : caseData;
-                }
-
-                if (!detail) throw new Error('无法获取评测详情');
-                showJudgeResultPanel(submissionId, detail, problemId, contestId);
-
-            } catch (err) {
-                vscode.window.showErrorMessage('提交失败：' + (err instanceof Error ? err.message : String(err)));
-            }
-        });
-    });
-    context.subscriptions.push(submitCmd);
-
-    const savedUsername = await context.secrets.get('oj-username');
-    const savedPassword = await context.secrets.get('oj-password');
-    if (savedUsername && savedPassword) {
-        vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: '正在自动登录...', cancellable: false }, async () => {
-            const ok = await login(savedUsername, savedPassword);
-            if (ok) { vscode.window.showInformationMessage('✅ 自动登录成功'); await contestProvider.refresh(); }
-            else vscode.window.showWarningMessage('⚠️ 自动登录失败，请手动登录');
-        });
-    } else {
-        vscode.window.showInformationMessage('💡 请先登录 123OJ（命令：登录 123OJ）');
-    }
-
-    const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right);
-    statusBar.text = '$(book) OJ Ready';
-    statusBar.command = 'oj.login';
-    statusBar.show();
-    context.subscriptions.push(statusBar);
-}
-
-export async function deactivate() {
-    console.log('miaomiaomiao 扩展已停用');
-}
-
 // ============= 辅助函数 =============
 
+function extractSamples(data: any): { input: string; output: string }[] {
+    let samples: { input: string; output: string }[] = [];
+    const rawInput = data.sinput || '';
+    const rawOutput = data.soutput || '';
+    if (rawInput && rawOutput) {
+        const inputParts = rawInput.split('|#)');
+        const outputParts = rawOutput.split('|#)');
+        for (let i = 0; i < Math.min(inputParts.length, outputParts.length); i++) {
+            const inp = inputParts[i]?.trim() || '';
+            const outp = outputParts[i]?.trim() || '';
+            if (inp || outp) samples.push({ input: inp, output: outp });
+        }
+    } else if (data.samples && Array.isArray(data.samples)) {
+        samples = data.samples.map((s: any) => ({ input: s.input || s.in || '', output: s.output || s.out || '' }));
+    } else if (data.sample && Array.isArray(data.sample)) {
+        samples = data.sample.map((s: any) => ({ input: s.input || s.in || '', output: s.output || s.out || '' }));
+    }
+    return samples;
+}
+
+function getLanguage(languageId: string, fileName: string): 'cpp' | 'python' | null {
+    const ext = fileName.split('.').pop()?.toLowerCase();
+    if (languageId === 'cpp' || languageId === 'c' || ext === 'cpp' || ext === 'cxx' || ext === 'cc' || ext === 'c') {
+        return 'cpp';
+    }
+    if (languageId === 'python' || ext === 'py') {
+        return 'python';
+    }
+    return null;
+}
+
+interface TestResult {
+    input: string;
+    expected: string;
+    actual: string;
+    status: 'AC' | 'WA' | 'TLE' | 'RE' | 'CE';
+    time: number;
+}
+
+async function runLocalJudge(
+    code: string,
+    language: 'cpp' | 'python',
+    samples: { input: string; output: string }[],
+    timeLimitMs: number = 2000
+): Promise<TestResult[]> {
+    const tmpDir = tmp.dirSync({ unsafeCleanup: true });
+    const workDir = tmpDir.name;
+
+    const results: TestResult[] = [];
+
+    let sourceFile: string;
+    let execFile: string;
+    let compileCmd: string | null = null;
+    let runCmd: string;
+
+    if (language === 'cpp') {
+        sourceFile = `${workDir}/solution.cpp`;
+        execFile = `${workDir}/solution.exe`;
+        compileCmd = `g++ -std=c++17 -O2 ${sourceFile} -o ${execFile}`;
+        runCmd = execFile;
+    } else {
+        sourceFile = `${workDir}/solution.py`;
+        execFile = sourceFile;
+        runCmd = `python3 ${execFile}`;
+    }
+
+    try {
+        await fs.writeFile(sourceFile, code, 'utf8');
+
+        if (compileCmd) {
+            try {
+                const { stderr } = await execPromise(compileCmd);
+                if (stderr) {
+                    results.push({
+                        input: '',
+                        expected: '',
+                        actual: stderr,
+                        status: 'CE',
+                        time: 0
+                    });
+                    return results;
+                }
+            } catch (err: any) {
+                results.push({
+                    input: '',
+                    expected: '',
+                    actual: err.stderr || err.message,
+                    status: 'CE',
+                    time: 0
+                });
+                return results;
+            }
+        }
+
+        for (let i = 0; i < samples.length; i++) {
+            const { input, output: expected } = samples[i];
+            const start = Date.now();
+            let stdout = '';
+            let stderr = '';
+            let timedOut = false;
+
+            try {
+                const child = spawn(runCmd, [], {
+                    cwd: workDir,
+                    shell: true,
+                    stdio: ['pipe', 'pipe', 'pipe']
+                });
+
+                child.stdin.write(input);
+                child.stdin.end();
+
+                let out = '';
+                let err = '';
+                child.stdout.on('data', (data: Buffer) => { out += data.toString(); });
+                child.stderr.on('data', (data: Buffer) => { err += data.toString(); });
+
+                const timeout = setTimeout(() => {
+                    child.kill('SIGTERM');
+                    timedOut = true;
+                }, timeLimitMs);
+
+                const exitCode = await new Promise<number>((resolve) => {
+                    child.on('close', (code) => resolve(code || 0));
+                });
+
+                clearTimeout(timeout);
+                stdout = out;
+                stderr = err;
+
+                const elapsed = Date.now() - start;
+
+                if (timedOut) {
+                    results.push({
+                        input,
+                        expected,
+                        actual: `Time Limit Exceeded (${timeLimitMs}ms)`,
+                        status: 'TLE',
+                        time: elapsed
+                    });
+                    continue;
+                }
+
+                if (exitCode !== 0) {
+                    results.push({
+                        input,
+                        expected,
+                        actual: stderr || `Exit code ${exitCode}`,
+                        status: 'RE',
+                        time: elapsed
+                    });
+                    continue;
+                }
+
+                // 规范化函数：统一换行符、去除每行行末空格、去除首尾空行
+function normalizeOutput(text: string): string {
+    return text
+        .replace(/\r\n/g, '\n')   // Windows 换行转 Unix
+        .replace(/\r/g, '\n')     // 老 Mac 换行转 Unix
+        .split('\n')
+        .map(line => line.trimEnd()) // 去除每行末尾空格（保留开头的缩进）
+        .join('\n')
+        .trim();                  // 去掉首尾空白行
+}
+
+const actualNormalized = normalizeOutput(stdout);
+const expectedNormalized = normalizeOutput(expected);
+const status = actualNormalized === expectedNormalized ? 'AC' : 'WA';
+
+                results.push({
+                    input,
+                    expected,
+                    actual: stdout,
+                    status,
+                    time: elapsed
+                });
+            } catch (err: any) {
+                results.push({
+                    input,
+                    expected,
+                    actual: err.message,
+                    status: 'RE',
+                    time: Date.now() - start
+                });
+            }
+        }
+    } finally {
+        tmpDir.removeCallback();
+    }
+
+    return results;
+}
+
+function showLocalJudgeResult(results: TestResult[], problemId: string, total: number) {
+    const passCount = results.filter(r => r.status === 'AC').length;
+    const score = Math.round((passCount / total) * 100);
+
+    let rows = '';
+    results.forEach((r, i) => {
+        const statusMap = {
+            'AC': '✅ Accepted',
+            'WA': '❌ Wrong Answer',
+            'TLE': '⏰ Time Limit Exceeded',
+            'RE': '💥 Runtime Error',
+            'CE': '🔧 Compile Error'
+        };
+        const colorMap = {
+            'AC': 'green',
+            'WA': 'red',
+            'TLE': 'orange',
+            'RE': 'darkred',
+            'CE': 'purple'
+        };
+        rows += `<tr>
+            <td>${i+1}</td>
+            <td style="color:${colorMap[r.status]}">${statusMap[r.status]}</td>
+            <td>${r.time} ms</td>
+            <td><pre style="max-height:100px;overflow:auto;text-align:left;">${r.actual}</pre></td>
+            <td><pre style="max-height:100px;overflow:auto;text-align:left;">${r.expected}</pre></td>
+        </tr>`;
+    });
+
+    const html = `<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>本地评测结果</title>
+<style>
+body{font-family:var(--vscode-font-family);padding:1rem 2rem;color:var(--vscode-editor-foreground);background:var(--vscode-editor-background);}
+table{width:100%;border-collapse:collapse;margin-top:1rem;}
+th,td{border:1px solid var(--vscode-panel-border);padding:0.5rem;text-align:center;vertical-align:middle;}
+th{background:var(--vscode-editor-background);}
+pre{white-space:pre-wrap;word-wrap:break-word;margin:0;text-align:left;}
+.summary{font-size:1.2rem;margin-bottom:1rem;}
+.score{font-weight:bold;color:var(--vscode-editor-foreground);}
+</style>
+</head>
+<body>
+    <h2>本地评测 - 题目 ${problemId}</h2>
+    <div class="summary">
+        通过: ${passCount} / ${total} &nbsp;&nbsp;
+        得分: <span class="score">${score}</span> / 100
+    </div>
+    <table>
+        <thead><tr><th>#</th><th>状态</th><th>耗时</th><th>你的输出</th><th>期望输出</th></tr></thead>
+        <tbody>${rows}</tbody>
+    </table>
+</body>
+</html>`;
+
+    const panel = vscode.window.createWebviewPanel(
+        'localJudgeResult',
+        `本地评测 #${problemId}`,
+        vscode.ViewColumn.Two,
+        { enableScripts: false, retainContextWhenHidden: true }
+    );
+    panel.webview.html = html;
+}
+
+// ---------- 提取的公共评测函数 ----------
+async function performLocalJudge(problemId: string, contestId: string) {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+        vscode.window.showErrorMessage('请先打开一个代码文件');
+        return;
+    }
+    const code = editor.document.getText();
+    if (!code.trim()) {
+        vscode.window.showErrorMessage('代码内容为空');
+        return;
+    }
+
+    const language = getLanguage(editor.document.languageId, editor.document.fileName);
+    if (!language) {
+        vscode.window.showErrorMessage('不支持的语言，请使用 C++ 或 Python');
+        return;
+    }
+
+    try {
+        const data = await getProblemDetail(problemId, contestId);
+        const samples = extractSamples(data);
+        if (samples.length === 0) {
+            vscode.window.showWarningMessage('该题目没有测试用例，无法本地评测');
+            return;
+        }
+
+        const timeLimit = parseInt(data.time || data.time_limit || '2000', 10);
+
+        await vscode.window.withProgress(
+            { location: vscode.ProgressLocation.Notification, title: '正在本地评测...', cancellable: false },
+            async () => {
+                const results = await runLocalJudge(code, language, samples, timeLimit);
+                showLocalJudgeResult(results, problemId, samples.length);
+            }
+        );
+    } catch (err: any) {
+        vscode.window.showErrorMessage(`本地评测失败：${err.message}`);
+    }
+}
+
+// ---------- 构建题面 HTML（添加“本地评测”按钮） ----------
 function buildProblemContentHtml(p: any): string {
     const { title, description, input, output, hint, timeLimit, memoryLimit, samples, rawInput, rawOutput, problemId, contestId } = p;
 
@@ -242,7 +326,10 @@ function buildProblemContentHtml(p: any): string {
         <h1 style="margin:0;">${title}</h1>
         ${timeLimit ? `<span><strong>⏱️ 时间限制：</strong>${timeLimit}ms</span>` : ''}
         ${memoryLimit ? `<span><strong>💾 内存限制：</strong>${memoryLimit}MB</span>` : ''}
-        <button onclick="vscode.postMessage({command:'openSubmit',problemId:'${problemId}',contestId:'${contestId}'})" style="background:var(--vscode-button-background);color:var(--vscode-button-foreground);border:none;padding:0.4rem 1rem;border-radius:4px;cursor:pointer;margin-left:auto;">📤 提交代码</button>
+        <div style="display:flex;gap:0.5rem;margin-left:auto;">
+            <button onclick="vscode.postMessage({command:'localJudge',problemId:'${problemId}',contestId:'${contestId}'})" style="background:var(--vscode-button-background);color:var(--vscode-button-foreground);border:none;padding:0.4rem 1rem;border-radius:4px;cursor:pointer;">🚀 本地评测</button>
+            <button onclick="vscode.postMessage({command:'openSubmit',problemId:'${problemId}',contestId:'${contestId}'})" style="background:var(--vscode-button-background);color:var(--vscode-button-foreground);border:none;padding:0.4rem 1rem;border-radius:4px;cursor:pointer;">📤 提交代码</button>
+        </div>
     </div>`;
 
     if (description) h += `<h2>📝 题目描述</h2><div>${nl2br(description)}</div>`;
@@ -295,7 +382,6 @@ function buildProblemContentHtml(p: any): string {
         </div>`;
     }
 
-    // 提示部分改为 Markdown 容器，不再使用 nl2br
     if (hint) h += `<h2>💡 提示</h2><div class="markdown-content">${hint}</div>`;
     return h;
 }
@@ -341,7 +427,6 @@ function getWebviewTemplate(title: string, body: string): string {
         .copy-btn:hover { opacity: 0.8; }
         .copy-btn:active { transform: scale(0.95); }
 
-        /* Markdown 表格样式 */
         .markdown-content table {
             border-collapse: collapse;
             margin: 1rem 0;
@@ -362,11 +447,8 @@ function getWebviewTemplate(title: string, body: string): string {
 <body>
     ${body}
 
-    <!-- 同步加载 Markdown 解析库 -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <!-- 同步加载 KaTeX 核心库 -->
     <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
-    <!-- 同步加载自动渲染扩展 -->
     <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
     <script>
         const vscode = acquireVsCodeApi();
@@ -388,7 +470,6 @@ function getWebviewTemplate(title: string, body: string): string {
         }
 
         document.addEventListener('DOMContentLoaded', function() {
-            // 复制按钮功能
             document.querySelectorAll('.copy-btn').forEach(btn => {
                 btn.addEventListener('click', function() {
                     const targetId = this.getAttribute('data-target');
@@ -403,14 +484,12 @@ function getWebviewTemplate(title: string, body: string): string {
                 });
             });
 
-            // 渲染所有 Markdown 内容
             if (typeof marked !== 'undefined') {
                 document.querySelectorAll('.markdown-content').forEach(el => {
                     el.innerHTML = marked.parse(el.textContent || '');
                 });
             }
 
-            // 启动数学公式渲染
             renderMath();
         });
     </script>
@@ -482,4 +561,321 @@ function showJudgeResultPanel(submissionId: string, detail: any, problemId: stri
 
     const panel = vscode.window.createWebviewPanel('judgeResult', `评测结果 #${submissionId}`, vscode.ViewColumn.Two, { enableScripts: false, retainContextWhenHidden: true });
     panel.webview.html = html;
+}
+
+// ============= 激活函数 =============
+export async function activate(context: vscode.ExtensionContext) {
+    console.log('miaomiaomiao 扩展已激活');
+
+    // ---------- 初始化 ----------
+    (async () => {
+        try {
+            console.log('[Test] 正在测试网络连通性...');
+            const res = await fetch('https://cppoj.kids123code.com');
+            console.log('[Test] ✅ 首页访问成功，状态码：', res.status);
+        } catch (err: any) {
+            console.error('[Test] ❌ 首页访问失败：', err.message);
+        }
+    })();
+
+    contestProvider = new ContestTreeProvider();
+    const contestTreeView = vscode.window.createTreeView('contestList', {
+        treeDataProvider: contestProvider,
+    });
+    context.subscriptions.push(contestTreeView);
+    await contestProvider.refresh();
+
+    problemProvider = new ProblemTreeProvider();
+    const problemTreeView = vscode.window.createTreeView('problemList', {
+        treeDataProvider: problemProvider,
+    });
+    context.subscriptions.push(problemTreeView);
+
+    // ---------- 其他命令 ----------
+    const helloCmd = vscode.commands.registerCommand('miaomiaomiao.helloWorld', () => {
+        vscode.window.showInformationMessage('Hello World from miaomiaomiao!');
+    });
+    context.subscriptions.push(helloCmd);
+
+    const openExternalCmd = vscode.commands.registerCommand('my-webview-extension.openExternal', () => {
+        vscode.env.openExternal(vscode.Uri.parse('https://example.com'));
+    });
+    context.subscriptions.push(openExternalCmd);
+
+    const openWebviewCmd = vscode.commands.registerCommand('my-webview-extension.openWebview', () => {
+        const panel = vscode.window.createWebviewPanel(
+            'websiteProxy', '网站（代理模式）', vscode.ViewColumn.Beside,
+            { enableScripts: true, retainContextWhenHidden: true }
+        );
+        panel.webview.html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>body{margin:0;overflow:hidden;background:#1e1e2e;}iframe{width:100vw;height:100vh;border:none;}</style></head><body><iframe src="http://127.0.0.1:3000/"></iframe></body></html>`;
+    });
+    context.subscriptions.push(openWebviewCmd);
+
+    const loginCmd = vscode.commands.registerCommand('oj.login', async () => {
+        const username = await vscode.window.showInputBox({ prompt: '输入用户名', placeHolder: '请输入你的 OJ 用户名' });
+        if (!username) return;
+        const password = await vscode.window.showInputBox({ prompt: '输入密码', password: true, placeHolder: '请输入你的密码' });
+        if (!password) return;
+        await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: '正在登录...', cancellable: false }, async () => {
+            const success = await login(username, password);
+            if (success) {
+                vscode.window.showInformationMessage('✅ 登录成功！');
+                await context.secrets.store('oj-username', username);
+                await context.secrets.store('oj-password', password);
+                await contestProvider.refresh();
+            } else {
+                vscode.window.showErrorMessage('❌ 登录失败，请检查用户名密码');
+            }
+        });
+    });
+    context.subscriptions.push(loginCmd);
+
+    const logoutCmd = vscode.commands.registerCommand('oj.logout', async () => {
+        await context.secrets.delete('oj-username');
+        await context.secrets.delete('oj-password');
+        vscode.window.showInformationMessage('👋 已登出，下次请手动登录');
+        await contestProvider.refresh();
+    });
+    context.subscriptions.push(logoutCmd);
+
+    const selectContestCmd = vscode.commands.registerCommand('oj.selectContest', async (contestId: string) => {
+        vscode.window.showInformationMessage(`已选择比赛: ${contestId}`);
+        problemProvider.setContestId(contestId);
+        await problemProvider.refresh();
+    });
+    context.subscriptions.push(selectContestCmd);
+
+    const refreshContestCmd = vscode.commands.registerCommand('oj.refreshContests', () => contestProvider.refresh());
+    context.subscriptions.push(refreshContestCmd);
+    const refreshProblemsCmd = vscode.commands.registerCommand('oj.refreshProblems', () => problemProvider.refresh());
+    context.subscriptions.push(refreshProblemsCmd);
+    const nextPageCmd = vscode.commands.registerCommand('oj.nextPage', () => problemProvider.nextPage());
+    context.subscriptions.push(nextPageCmd);
+    const prevPageCmd = vscode.commands.registerCommand('oj.prevPage', () => problemProvider.prevPage());
+    context.subscriptions.push(prevPageCmd);
+    const contestNextCmd = vscode.commands.registerCommand('oj.contestNextPage', () => contestProvider.nextPage());
+    const contestPrevCmd = vscode.commands.registerCommand('oj.contestPrevPage', () => contestProvider.prevPage());
+    context.subscriptions.push(contestNextCmd, contestPrevCmd);
+
+    // ---------- 打开题目（修改消息处理） ----------
+    const openProblemCmd = vscode.commands.registerCommand('oj.openProblem', async (problemId: string, problemTitle?: string) => {
+        try {
+            const contestId = problemProvider.getCurrentContestId();
+            if (!contestId) { vscode.window.showErrorMessage('未选择比赛，请先选择一场比赛'); return; }
+            await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: '正在加载题目...', cancellable: false }, async () => {
+                const data = await getProblemDetail(problemId, contestId);
+                const panel = vscode.window.createWebviewPanel('problemDetail', `题目: ${problemTitle || problemId}`, vscode.ViewColumn.Beside, { enableScripts: true, retainContextWhenHidden: true });
+                const title = problemTitle || data.title || data.problemtitle || `题目 ${problemId}`;
+                const description = data.des || data.description || data.content || '';
+                const input = data.input || '';
+                const output = data.output || '';
+                const hint = data.hint || '';
+                const timeLimit = data.time || data.time_limit || '';
+                const memoryLimit = data.memory || data.memory_limit || '';
+                let samples: { input: string; output: string }[] = [];
+                const rawInput = data.sinput || '';
+                const rawOutput = data.soutput || '';
+                if (rawInput && rawOutput) {
+                    const inputParts = rawInput.split('|#)');
+                    const outputParts = rawOutput.split('|#)');
+                    for (let i = 0; i < Math.min(inputParts.length, outputParts.length); i++) {
+                        const inp = inputParts[i]?.trim() || '';
+                        const outp = outputParts[i]?.trim() || '';
+                        if (inp || outp) samples.push({ input: inp, output: outp });
+                    }
+                } else if (data.samples && Array.isArray(data.samples)) {
+                    samples = data.samples.map((s: any) => ({ input: s.input || s.in || '', output: s.output || s.out || '' }));
+                } else if (data.sample && Array.isArray(data.sample)) {
+                    samples = data.sample.map((s: any) => ({ input: s.input || s.in || '', output: s.output || s.out || '' }));
+                }
+                const contentHtml = buildProblemContentHtml({ title, description, input, output, hint, timeLimit, memoryLimit, samples, rawInput, rawOutput, problemId, contestId });
+                panel.webview.html = getWebviewTemplate(title, contentHtml);
+
+                // 处理来自 Webview 的消息
+                panel.webview.onDidReceiveMessage(async msg => {
+                    if (msg.command === 'openSubmit') {
+                        vscode.commands.executeCommand('oj.submit', msg.problemId, msg.contestId);
+                    } else if (msg.command === 'localJudge') {
+                        await performLocalJudge(msg.problemId, msg.contestId);
+                    }
+                });
+            });
+        } catch (err) {
+            vscode.window.showErrorMessage('加载题目失败：' + (err instanceof Error ? err.message : String(err)));
+        }
+    });
+    context.subscriptions.push(openProblemCmd);
+
+    // ---------- 提交命令 ----------
+    const submitCmd = vscode.commands.registerCommand('oj.submit', async (problemId: string, contestId: string) => {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) { vscode.window.showErrorMessage('请先打开一个代码文件'); return; }
+        const code = editor.document.getText();
+        if (!code.trim()) { vscode.window.showErrorMessage('代码内容为空，无法提交'); return; }
+
+        const selected = await vscode.window.showQuickPick(
+            ['C++', 'Python3'].map(l => ({ label: l, value: l })),
+            { placeHolder: '选择编程语言' }
+        );
+        if (!selected) return;
+
+        await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: '正在提交代码...', cancellable: false }, async () => {
+            try {
+                const submitResult = await submitCode({ problem: problemId, contest: contestId, language: selected.value, code });
+                const submissionId = submitResult.submission_id || submitResult.id || submitResult.statusid;
+                if (!submissionId) throw new Error('提交成功但未返回 ID：' + JSON.stringify(submitResult));
+                vscode.window.showInformationMessage(`✅ 提交成功！提交 ID: ${submissionId}，正在评测...`);
+
+                let judgeDone = false;
+                for (let i = 0; i < 60; i++) {
+                    await new Promise(r => setTimeout(r, 1000));
+                    const raw = await getJudgeStatus(submissionId);
+                    const item = Array.isArray(raw) ? raw[0] : raw;
+                    if (!item) continue;
+                    const res = item.result;
+                    const done = (typeof res === 'string' && !/^-\d+$/.test(res)) ||
+                                 (typeof res === 'number' && res >= 0);
+                    if (done) {
+                        judgeDone = true;
+                        break;
+                    }
+                }
+
+                if (!judgeDone) {
+                    vscode.window.showWarningMessage('⏰ 评测超时，请稍后在 OJ 网站上查看结果。');
+                    return;
+                }
+
+                let detail: any = null;
+                for (let retry = 0; retry < 30; retry++) {
+                    const caseData = await getCaseStatus(submissionId);
+                    const items = Array.isArray(caseData) ? caseData : [caseData];
+                    detail = items.find((item: any) => {
+                        const timeStr = String(item.cputimelist ?? '');
+                        return timeStr.includes('|');
+                    });
+                    if (detail) break;
+                    await new Promise(r => setTimeout(r, 2000));
+                }
+                if (!detail) {
+                    const caseData = await getCaseStatus(submissionId);
+                    detail = Array.isArray(caseData) ? caseData[0] : caseData;
+                }
+
+                if (!detail) throw new Error('无法获取评测详情');
+                showJudgeResultPanel(submissionId, detail, problemId, contestId);
+
+            } catch (err) {
+                vscode.window.showErrorMessage('提交失败：' + (err instanceof Error ? err.message : String(err)));
+            }
+        });
+    });
+    context.subscriptions.push(submitCmd);
+
+    // ---------- 传送至 CPH ----------
+    const sendToCPHCmd = vscode.commands.registerCommand('oj.sendToCPH', async (node: ProblemItem) => {
+        if (!node) {
+            vscode.window.showErrorMessage('请从题目列表中选中一道题');
+            return;
+        }
+
+        const problemId = node.problem.problemid;
+        const contestId = node.contestId;
+
+        const config = vscode.workspace.getConfiguration('competitive-programming-helper');
+        const port = config.get<number>('port') || 10045;
+
+        try {
+            const data = await getProblemDetail(problemId, contestId);
+
+            let samples: { input: string; output: string }[] = [];
+            const rawInput = data.sinput || '';
+            const rawOutput = data.soutput || '';
+            if (rawInput && rawOutput) {
+                const inputParts = rawInput.split('|#)');
+                const outputParts = rawOutput.split('|#)');
+                for (let i = 0; i < Math.min(inputParts.length, outputParts.length); i++) {
+                    const inp = inputParts[i]?.trim() || '';
+                    const outp = outputParts[i]?.trim() || '';
+                    if (inp || outp) samples.push({ input: inp, output: outp });
+                }
+            } else if (data.samples && Array.isArray(data.samples)) {
+                samples = data.samples.map((s: any) => ({ input: s.input || s.in || '', output: s.output || s.out || '' }));
+            } else if (data.sample && Array.isArray(data.sample)) {
+                samples = data.sample.map((s: any) => ({ input: s.input || s.in || '', output: s.output || s.out || '' }));
+            }
+
+            if (samples.length === 0) {
+                vscode.window.showWarningMessage('该题目没有测试用例，无法传送');
+                return;
+            }
+
+            const title = data.title || data.problemtitle || `题目 ${problemId}`;
+            const timeLimit = parseInt(data.time || data.time_limit || '1000', 10);
+            const memoryLimit = parseInt(data.memory || data.memory_limit || '256', 10);
+
+            const payload = {
+                name: title,
+                group: '123编程',
+                url: `https://cppoj.kids123code.com/contest/${contestId}/problem/${problemId}`,
+                memoryLimit: memoryLimit,
+                timeLimit: timeLimit,
+                tests: samples,
+                testType: 'single',
+                input: { type: 'stdin' },
+                output: { type: 'stdout' }
+            };
+
+            await vscode.window.withProgress(
+                { location: vscode.ProgressLocation.Notification, title: '正在传送至 CPH...', cancellable: false },
+                async () => {
+                    await axios.post(`http://localhost:${port}/`, payload, {
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+                }
+            );
+
+            vscode.window.showInformationMessage(`✅ 已成功传送题目 “${title}” 至 CPH！`);
+        } catch (err: any) {
+            if (err.code === 'ECONNREFUSED') {
+                vscode.window.showErrorMessage(`❌ 无法连接到 CPH（端口 ${port}），请确保 CPH 插件已激活并正在运行。`);
+            } else {
+                vscode.window.showErrorMessage(`传送失败：${err.message || String(err)}`);
+            }
+        }
+    });
+    context.subscriptions.push(sendToCPHCmd);
+
+    // ---------- 本地评测命令（调用公共函数） ----------
+    const localJudgeCmd = vscode.commands.registerCommand('oj.localJudge', async (node: ProblemItem) => {
+        if (!node) {
+            vscode.window.showErrorMessage('请从题目列表中选中一道题');
+            return;
+        }
+        await performLocalJudge(node.problem.problemid, node.contestId);
+    });
+    context.subscriptions.push(localJudgeCmd);
+
+    // ---------- 自动登录 ----------
+    const savedUsername = await context.secrets.get('oj-username');
+    const savedPassword = await context.secrets.get('oj-password');
+    if (savedUsername && savedPassword) {
+        vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: '正在自动登录...', cancellable: false }, async () => {
+            const ok = await login(savedUsername, savedPassword);
+            if (ok) { vscode.window.showInformationMessage('✅ 自动登录成功'); await contestProvider.refresh(); }
+            else vscode.window.showWarningMessage('⚠️ 自动登录失败，请手动登录');
+        });
+    } else {
+        vscode.window.showInformationMessage('💡 请先登录 123OJ（命令：登录 123OJ）');
+    }
+
+    const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right);
+    statusBar.text = '$(book) OJ Ready';
+    statusBar.command = 'oj.login';
+    statusBar.show();
+    context.subscriptions.push(statusBar);
+}
+
+export async function deactivate() {
+    console.log('miaomiaomiao 扩展已停用');
 }

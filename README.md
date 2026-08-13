@@ -1,10 +1,10 @@
-# 123oj
+# vscode-123oj
 
 轻松的让你在 VS Code 上使用[青岛123编程](https://www.kids123code.com/)oj。
 
 ## 使用说明
 
-请参考`Github`上的wiki页面。
+请参考`Github`上的[wiki](https://github.com/nidababeiwocaosile/vscode-123oj/wiki)页面。
 
 ## 完成功能
 
@@ -14,6 +14,7 @@
 * 登出账号
 * 提交代码
 * 提交代码后查看自己评测
+* 一键测评题目小样例
 
 ## 考虑开发功能
 
@@ -24,10 +25,3 @@
 
 * deepseek
 * teto_cai
-# vscode-123oj
-# vscode-123oj
-# vscode-123oj
-# vscode-123oj
-# vscode-123oj
-# vscode-123oj
-# vscode-123oj

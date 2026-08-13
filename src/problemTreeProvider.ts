@@ -11,14 +11,17 @@ interface Problem {
     ishidden: number;
 }
 
-class ProblemItem extends vscode.TreeItem {
-    constructor(public readonly problem: Problem) {
+export class ProblemItem extends vscode.TreeItem {
+    public readonly contestId: string;
+    public readonly problem: Problem;
+    constructor(problem: Problem) {
         super(problem.problemtitle || `题目 ${problem.problemid}`, vscode.TreeItemCollapsibleState.None);
+        this.problem = problem;
+        this.contestId = String(problem.contestid);
         this.tooltip = `ID: ${problem.problemid} | 排名: ${problem.rank}`;
         this.description = `#${problem.problemid}`;
         this.iconPath = new vscode.ThemeIcon('symbol-number');
         this.contextValue = 'problem';
-        // 传递 problemid 和 problemtitle
         this.command = {
             command: 'oj.openProblem',
             title: '打开题目',
