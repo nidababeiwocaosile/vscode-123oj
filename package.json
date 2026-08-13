@@ -2,7 +2,7 @@
   "name": "123oj",
   "displayName": "青岛123编程oj",
   "description": "轻松地在 VS Code 中使用青岛123编程oj",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "engines": {
     "vscode": "^1.125.0"
   },
@@ -57,6 +57,11 @@
       {
         "command": "oj.openProblem",
         "title": "打开题目"
+      },
+      {
+        "command": "oj.localJudge",
+        "title": "本地评测",
+        "icon": "$(run)"
       }
     ],
     "viewsContainers": {
@@ -109,6 +114,13 @@
           "when": "view == contestList",
           "group": "navigation"
         }
+      ],
+      "view/item/context": [
+        {
+          "command": "oj.localJudge",
+          "when": "view == problemList",
+          "group": "inline"
+        }
       ]
     }
   },
@@ -125,6 +137,7 @@
     "@types/mocha": "^10.0.10",
     "@types/node": "24.x",
     "@types/vscode": "^1.125.0",
+    "@types/tmp": "^0.2.6",
     "@vscode/test-cli": "^0.0.15",
     "@vscode/test-electron": "^3.0.0",
     "eslint": "^10.5.0",
@@ -137,6 +150,7 @@
   },
   "dependencies": {
     "axios": "^1.19.0",
-    "http-proxy": "^1.18.1"
+    "http-proxy": "^1.18.1",
+    "tmp": "^0.2.3"
   }
 }
