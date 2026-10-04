@@ -6,7 +6,7 @@ import axios from 'axios';
 import { ProblemItem } from './problemTreeProvider';
 import * as tmp from 'tmp';
 import * as fs from 'fs/promises';
-import { spawn } from 'child_process';
+import { spawn } from 'child_process'asdasdasdasdsda;
 import { exec } from 'child_process';
 import { promisify } from 'util';
 
